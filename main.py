@@ -1,19 +1,20 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import List, Optional
 from datetime import datetime, timedelta
-from sqlalchemy.orm import Session
-from jose import jwt  # python-jose dan
+from typing import Optional
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from jose import jwt
 from passlib.context import CryptContext
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 # Database import
-from database import get_db, init_db, User, Message, ChatRoom, RoomMember, SessionLocal
+from database import get_db, init_db, User, Message, SessionLocal
 
 app = FastAPI(title="Chat API with SQLAlchemy", version="2.0.0")
 
-# Sozlamalar
+# Settings
 SECRET_KEY = "your-secret-key-change-this-in-production"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
@@ -27,9 +28,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Password hashing - Argon2 (zamonaviyroq va xavfsizroq)
+# Password hashing
 pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 security = HTTPBearer()
+
 
 # Pydantic schemas
 class UserRegister(BaseModel):
@@ -37,9 +39,11 @@ class UserRegister(BaseModel):
     password: str
     full_name: Optional[str] = None
 
+
 class UserLogin(BaseModel):
     username: str
     password: str
+
 
 class Token(BaseModel):
     access_token: str
@@ -47,8 +51,10 @@ class Token(BaseModel):
     user_id: str  # UUID
     username: str
 
+
 class MessageCreate(BaseModel):
     message: str
+
 
 class MessageResponse(BaseModel):
     id: int
@@ -56,16 +62,21 @@ class MessageResponse(BaseModel):
     username: str
     message: str
     created_at: datetime
-    
+
     class Config:
         from_attributes = True
 
-# Helper funksiyalar
+
+# ========================
+# === Helper functions ===
+# ========================
 def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
 
+
 def get_password_hash(password):
     return pwd_context.hash(password)
+
 
 def create_access_token(data: dict):
     to_encode = data.copy()
@@ -74,6 +85,7 @@ def create_access_token(data: dict):
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
+
 def verify_token(token: str):
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
@@ -81,15 +93,19 @@ def verify_token(token: str):
         username: str = payload.get("username")
         if user_id is None or username is None:
             return None
-        return {"user_id": user_id, "username": username}
+        return {
+            "user_id": user_id,
+            "username": username
+        }
     except jwt.ExpiredSignatureError:
         return None
     except jwt.JWTError:
         return None
 
+
 def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
-    db: Session = Depends(get_db)
+        credentials: HTTPAuthorizationCredentials = Depends(security),
+        db: Session = Depends(get_db)
 ):
     token = credentials.credentials
     user_data = verify_token(token)
@@ -98,13 +114,13 @@ def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token yaroqsiz yoki muddati tugagan"
         )
-    
-    # Database'dan user olish
+
+    # Get user from database
     user = db.query(User).filter(User.id == user_data["user_id"]).first()
     if not user:
-        raise HTTPException(status_code=404, detail="Foydalanuvchi topilmadi")
-    
+        raise HTTPException(status_code=404, detail="User not found.")
     return user
+
 
 # Connection Manager
 class ConnectionManager:
@@ -128,13 +144,16 @@ class ConnectionManager:
             except:
                 pass
 
+
 manager = ConnectionManager()
+
 
 # Startup event
 @app.on_event("startup")
 async def startup():
     init_db()
     print("✅ Server ishga tushdi!")
+
 
 # API Endpoints
 @app.get("/")
@@ -150,6 +169,7 @@ async def root():
         }
     }
 
+
 @app.post("/auth/register", response_model=Token)
 async def register(user_data: UserRegister, db: Session = Depends(get_db)):
     """Ro'yxatdan o'tish"""
@@ -157,23 +177,23 @@ async def register(user_data: UserRegister, db: Session = Depends(get_db)):
     existing = db.query(User).filter(User.username == user_data.username).first()
     if existing:
         raise HTTPException(status_code=400, detail="Bu username band")
-    
+
     # Yangi user (UUID avtomatik yaratiladi)
     new_user = User(
         username=user_data.username,
         full_name=user_data.full_name,
         hashed_password=get_password_hash(user_data.password)
     )
-    
+
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
-    
+
     # Token
     access_token = create_access_token(
         data={"user_id": new_user.id, "username": user_data.username}
     )
-    
+
     return Token(
         access_token=access_token,
         token_type="bearer",
@@ -181,27 +201,29 @@ async def register(user_data: UserRegister, db: Session = Depends(get_db)):
         username=user_data.username
     )
 
+
 @app.post("/auth/login", response_model=Token)
 async def login(user_data: UserLogin, db: Session = Depends(get_db)):
     """Login"""
     user = db.query(User).filter(User.username == user_data.username).first()
-    
+
     if not user or not verify_password(user_data.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Username yoki parol noto'g'ri"
         )
-    
+
     access_token = create_access_token(
         data={"user_id": user.id, "username": user.username}
     )
-    
+
     return Token(
         access_token=access_token,
         token_type="bearer",
         user_id=user.id,
         username=user.username
     )
+
 
 @app.get("/auth/me")
 async def get_me(current_user: User = Depends(get_current_user)):
@@ -215,10 +237,11 @@ async def get_me(current_user: User = Depends(get_current_user)):
         "last_seen": current_user.last_seen
     }
 
+
 @app.get("/users")
 async def get_users(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+        current_user: User = Depends(get_current_user),
+        db: Session = Depends(get_db)
 ):
     """Barcha foydalanuvchilar"""
     users = db.query(User).filter(User.is_active == True).all()
@@ -236,19 +259,20 @@ async def get_users(
         "count": len(users)
     }
 
+
 @app.get("/messages")
 async def get_messages(
-    limit: int = 50,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+        limit: int = 50,
+        current_user: User = Depends(get_current_user),
+        db: Session = Depends(get_db)
 ):
     """Xabarlar tarixi"""
     messages = db.query(Message).filter(
         Message.is_deleted == False
     ).order_by(Message.created_at.desc()).limit(limit).all()
-    
+
     messages.reverse()  # Eskidan yangiga
-    
+
     return {
         "messages": [
             {
@@ -263,22 +287,23 @@ async def get_messages(
         "count": len(messages)
     }
 
+
 @app.post("/messages")
 async def send_message(
-    message_data: MessageCreate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+        message_data: MessageCreate,
+        current_user: User = Depends(get_current_user),
+        db: Session = Depends(get_db)
 ):
     """Xabar yuborish"""
     new_message = Message(
         user_id=current_user.user_id,
         message=message_data.message
     )
-    
+
     db.add(new_message)
     db.commit()
     db.refresh(new_message)
-    
+
     # Broadcast
     await manager.broadcast({
         "type": "new_message",
@@ -290,71 +315,75 @@ async def send_message(
             "created_at": new_message.created_at.isoformat()
         }
     })
-    
+
     return {"message": "Yuborildi", "id": new_message.id}
+
 
 @app.delete("/messages/{message_id}")
 async def delete_message(
-    message_id: str,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+        message_id: str,
+        current_user: User = Depends(get_current_user),
+        db: Session = Depends(get_db)
 ):
     """Xabar o'chirish"""
     message = db.query(Message).filter(Message.id == message_id).first()
-    
+
     if not message:
         raise HTTPException(status_code=404, detail="Xabar topilmadi")
-    
+
     if message.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Faqat o'z xabaringizni o'chira olasiz")
-    
+
     message.is_deleted = True
     db.commit()
-    
+
     await manager.broadcast({
         "type": "message_deleted",
         "message_id": message_id
     })
-    
+
     return {"message": "O'chirildi"}
 
-# WebSocket
+
+# ===================
+# ==== WebSocket ====
+# ===================
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket, token: str):
-    """WebSocket ulanish"""
+    """WebSocket connection"""
     user_data = verify_token(token)
     if not user_data:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
-    
+
     user_id = user_data["user_id"]
-    
-    # User ni database'dan olish
+
+    # search user from database
     db = SessionLocal()
     try:
         user = db.query(User).filter(User.id == user_id).first()
         if not user:
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
-        
+
         username = user.username
-        
-        # Online qilish
+
+        # setting online
         user.is_online = True
         user.last_seen = datetime.utcnow()
         db.commit()
     finally:
         db.close()
-    
+
     await manager.connect(user_id, websocket)
-    
+
     await manager.broadcast({
         "type": "user_joined",
         "user_id": user_id,
         "username": username,
         "timestamp": datetime.utcnow().isoformat()
     })
-    
+
     try:
         while True:
             try:
@@ -362,7 +391,7 @@ async def websocket_endpoint(websocket: WebSocket, token: str):
             except:
                 text_data = await websocket.receive_text()
                 data = {"type": "message", "message": text_data}
-            
+
             if data.get("type") == "message":
                 # Har bir xabar uchun yangi session
                 db = SessionLocal()
@@ -371,11 +400,11 @@ async def websocket_endpoint(websocket: WebSocket, token: str):
                         user_id=user_id,
                         message=data["message"]
                     )
-                    
+
                     db.add(new_message)
                     db.commit()
                     db.refresh(new_message)
-                    
+
                     await manager.broadcast({
                         "type": "new_message",
                         "data": {
@@ -388,22 +417,22 @@ async def websocket_endpoint(websocket: WebSocket, token: str):
                     })
                 finally:
                     db.close()
-            
+
             elif data.get("type") == "typing":
                 await manager.broadcast({
                     "type": "user_typing",
                     "user_id": user_id,
                     "username": username
                 }, exclude_user=user_id)
-            
+
             elif data.get("type") == "ping":
                 # Heartbeat uchun
                 await websocket.send_json({"type": "pong"})
-    
+
     except WebSocketDisconnect:
         manager.disconnect(user_id)
-        
-        # Offline qilish
+
+        # change user status to offline
         db = SessionLocal()
         try:
             user = db.query(User).filter(User.id == user_id).first()
@@ -413,7 +442,7 @@ async def websocket_endpoint(websocket: WebSocket, token: str):
                 db.commit()
         finally:
             db.close()
-        
+
         await manager.broadcast({
             "type": "user_left",
             "user_id": user_id,
@@ -424,20 +453,20 @@ async def websocket_endpoint(websocket: WebSocket, token: str):
         print(f"WebSocket error: {e}")
         manager.disconnect(user_id)
 
+
 @app.get("/stats")
 async def get_stats(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+        current_user: User = Depends(get_current_user),
+        db: Session = Depends(get_db)
 ):
     """Statistika"""
     total_users = db.query(User).count()
     online_users = db.query(User).filter(User.is_online == True).count()
     total_messages = db.query(Message).filter(Message.is_deleted == False).count()
-    
+
     return {
         "total_messages": total_messages,
         "total_users": total_users,
         "online_users": online_users,
         "active_connections": len(manager.active_connections)
     }
-
